@@ -1,0 +1,86 @@
+version: '3.8'
+
+services:
+  # MongoDB Database (Single-node replica set for ACID transaction support)
+  mongodb:
+    image: mongo:7.0
+    container_name: luxe-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_DATABASE: luxe_ecommerce
+    entrypoint:
+      - bash
+      - -c
+      - |
+        /usr/bin/mongod --bind_ip_all --replSet rs0 &
+        MONGOD_PID=$$!
+        echo "Waiting for MongoDB startup..."
+        until mongosh --eval "db.adminCommand('ping')" > /dev/null 2>&1; do
+          sleep 1
+        done
+        echo "Initializing Replica Set rs0..."
+        mongosh --eval 'try { rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "localhost:27017" }] }) } catch(e) { print("Replica set already initialized: " + e) }'
+        wait $$MONGOD_PID
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # Redis In-Memory Store & Queue Broker
+  redis:
+    image: redis:7-alpine
+    container_name: luxe-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Mongo Express UI (Database visualization)
+  mongo-express:
+    image: mongo-express:1.0.2-alpha.4
+    container_name: luxe-mongo-express
+    restart: unless-stopped
+    ports:
+      - "8082:8081"
+    environment:
+      ME_CONFIG_MONGODB_SERVER: mongodb
+      ME_CONFIG_MONGODB_PORT: 27017
+      ME_CONFIG_MONGODB_ENABLE_ADMIN: "true"
+      ME_CONFIG_BASICAUTH: "false"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+
+  # Redis Commander UI (Redis key & queue inspector)
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: luxe-redis-commander
+    restart: unless-stopped
+    ports:
+      - "8083:8081"
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  mongo-data:
+    driver: local
+  redis-data:
+    driver: local
+
